@@ -328,7 +328,16 @@ async function verifyDiagramRaster(svgPath) {
   if (png.length < 1000) {
     throw new Error(`${svgPath}: rasterized PNG looks empty (${png.length} bytes)`);
   }
-  execSync(`xmllint --noout "${svgPath}"`, { stdio: "pipe" });
+  try {
+    execSync(`xmllint --noout "${svgPath}"`, { stdio: "pipe" });
+  } catch (err) {
+    const msg = String(err?.stderr ?? err?.message ?? err);
+    if (/xmllint: not found|ENOENT/i.test(msg)) {
+      console.warn(`skip xmllint (not installed): ${svgPath}`);
+    } else {
+      throw err;
+    }
+  }
   assertSvgArrows(svgPath);
 }
 
