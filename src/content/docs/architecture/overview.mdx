@@ -1,0 +1,43 @@
+---
+title: Architecture overview
+description: CodeCommit kpack ECR managed Argo CD and Pulse on EKS.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+import ThemeDiagram from "@/components/ThemeDiagram.astro";
+import DiagramIconCredit from "@/components/DiagramIconCredit.astro";
+
+## Lab topology
+
+<ThemeDiagram
+  dark="architecture-diagram.svg"
+  light="architecture-diagram-light.svg"
+  alt="pulse-app and pulse-deploy CodeCommit repos feeding kpack build and Argo CD deploy to Pulse on EKS via ECR"
+/>
+
+## Build vs deploy stages
+
+One <Tooltip term="gitops" label="GitOps" /> repo (`pulse-deploy`), two Argo CD Applications, plus a kpack `Image` that is **not** an Application:
+
+<ThemeDiagram
+  dark="gitops-stages-diagram.svg"
+  light="gitops-stages-diagram-light.svg"
+  alt="Three stages: Application kpack installs the controller, Image CR pulse builds to ECR, Application pulse deploys the workload"
+/>
+
+## Repositories
+
+| Repo | Consumer |
+| --- | --- |
+| `pulse-app` | <Tooltip term="kpack" label="kpack" /> builds from source |
+| `pulse-deploy` | <Tooltip term="argocd" label="Argo CD" /> — Application **kpack** (`path: kpack`) and Application **pulse** (`path: .`) |
+
+## Auth
+
+See [IAM map](/reference/iam-map/) for CodeCommit, ECR, and Argo CD auth. <Tooltip term="irsa" label="IRSA" /> on `kpack-sa` is one path; kpack still needs an ECR docker-registry secret to push.
+
+## `demo/` layout
+
+`demo/app` and `demo/deploy` are published to the <Tooltip term="codecommit" label="CodeCommit" /> repos above. Platform templates and `demo/.generated/` stay local until you run the lab.
+
+<DiagramIconCredit />

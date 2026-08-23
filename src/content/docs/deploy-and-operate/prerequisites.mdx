@@ -1,0 +1,93 @@
+---
+title: Prerequisites
+description: Tools, versions, and AWS requirements before the buildpacks EKS lab.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+
+## Tools
+
+| Tool | Minimum | Check |
+| --- | --- | --- |
+| AWS CLI v2 | current | `aws --version` |
+| <Tooltip term="eksctl" label="eksctl" /> | **0.230.0+** (latest recommended) | `eksctl version` |
+| kubectl | client near cluster version (1.29+) | `kubectl version --client` |
+| jq | any recent | `jq --version` |
+| git | any recent | `git --version` |
+| curl | any recent | `curl --version` |
+| Go | 1.22+ (optional local <Tooltip term="pulse" label="Pulse" /> test) | `go version` |
+
+Optional: `git-remote-codecommit` for easier <Tooltip term="codecommit" label="CodeCommit" /> pushes (`pip install git-remote-codecommit`).
+
+If `eksctl` is missing or older than **0.230.0**, install from the [official GitHub release](https://eksctl.io/installation/):
+
+```bash
+ARCH=$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+PLATFORM=$(uname -s)_$ARCH
+curl -sLO "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_${PLATFORM}.tar.gz"
+tar -xzf "eksctl_${PLATFORM}.tar.gz" -C /tmp && rm "eksctl_${PLATFORM}.tar.gz"
+sudo install -m 0755 /tmp/eksctl /usr/local/bin && rm /tmp/eksctl
+eksctl version
+```
+
+## Auth and Region
+
+The lab uses **`ap-southeast-2`** for the cluster and for <Tooltip term="identity-center" label="IAM Identity Center" /> (`IDC_REGION`). Keep `AWS_REGION` / `IDC_REGION` on that Region for all steps.
+
+CLI auth uses SSO via profile **`sandbox`** (`aws sso login`). The [Argo CD capability](/deploy-and-operate/argocd-capability/) page wires that same Identity Center directory so you can SSO into the managed Argo CD UI.
+
+```bash
+export AWS_PROFILE=sandbox
+aws sso login
+aws sts get-caller-identity
+```
+
+## IAM
+
+You need permission to create <Tooltip term="eks" label="EKS" /> clusters, CodeCommit repositories, <Tooltip term="ecr" label="ECR" /> repositories, IAM roles (<Tooltip term="irsa" label="IRSA" /> for <Tooltip term="kpack" label="kpack" />), and EKS capabilities (managed <Tooltip term="argocd" label="Argo CD" />).
+
+## Existing cluster shortcut
+
+If you already run **EKS Auto Mode** with **managed Argo CD**, run [Bootstrap AWS](/deploy-and-operate/bootstrap-aws/) for CodeCommit and ECR, then skip to [CodeCommit publish](/deploy-and-operate/codecommit/). If the cluster exists but Argo CD is missing, still do [Argo CD capability](/deploy-and-operate/argocd-capability/) before CodeCommit.
+
+## Working directory
+
+Lab assets live under **`demo/`** at the repository root (`app/`, `deploy/`, `platform/`). Generated files (`demo/.generated/`, `demo/config/` except `env.example`) are gitignored. Relative paths like `config/…` and `platform/…` mean `demo/config/…` and `demo/platform/…`.
+
+## Lab names (scripts and agents)
+
+Canonical AWS resource names live in **`demo/aws-resources.json`** (ECR `pulse`, CodeCommit repos, cluster, IAM). Load shell exports without copying from every page:
+
+```bash
+eval "$(node scripts/export-lab-env.mjs)"
+# or: set -a && source demo/config/env.example && set +a
+```
+
+Filter by service: `node scripts/export-lab-env.mjs --resource ecr`. See [AGENTS.md](https://github.com/jajera/buildpacks-eks-walkthrough/blob/main/AGENTS.md) for agent-oriented notes.
+
+Paste this block from the **repository root** (not from inside `demo/`) if you prefer manual exports:
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+export AWS_REGION=ap-southeast-2
+export AWS_DEFAULT_REGION="$AWS_REGION"
+export IDC_REGION="$AWS_REGION"
+export CLUSTER_NAME=cluster-1
+export K8S_VERSION=1.36
+export LAB_DIR="$(pwd)/demo"
+mkdir -p "$LAB_DIR"
+```
+
+Then either stay at the repo root (pages that use `demo/…` paths) or `cd "$LAB_DIR"` for pages that write `config/…` under `demo/`.
+
+If you are already inside `demo/`, set `export LAB_DIR="$(pwd)"` instead of `$(pwd)/demo`.
+
+<Aside type="tip">
+  Keep one shell open for the lab. Later pages reuse `LAB_DIR`, `CLUSTER_NAME`, `AWS_REGION`, `IDC_REGION`, `AWS_PROFILE`, and kubeconfig context. If you open a new shell, re-export from the repository root (or set <code>LAB_DIR</code> to the absolute path of <code>demo/</code>).
+</Aside>
+
+## Cost awareness
+
+While the lab runs you pay for the EKS control plane and any Auto Mode nodes your builds and workloads schedule. A LoadBalancer for Pulse adds cost while it exists. [Teardown](/deploy-and-operate/teardown/) deletes the cluster and other billable resources.

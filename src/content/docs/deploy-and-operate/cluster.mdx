@@ -1,0 +1,85 @@
+---
+title: Cluster (Auto Mode)
+description: Create the eval cluster with eksctl and EKS Auto Mode.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+
+Skip this page if you already have a suitable cluster. Jump to [Argo CD capability](/deploy-and-operate/argocd-capability/) or [CodeCommit publish](/deploy-and-operate/codecommit/).
+
+## Set variables
+
+Reuse the exports from [Prerequisites](/deploy-and-operate/prerequisites/) and [Bootstrap AWS](/deploy-and-operate/bootstrap-aws/). Work under **`demo/`** (`config/` below is `demo/config/`):
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+export CLUSTER_NAME=cluster-1
+export AWS_REGION=ap-southeast-2
+export AWS_DEFAULT_REGION="$AWS_REGION"
+export IDC_REGION="$AWS_REGION"
+export K8S_VERSION=1.36
+# From repository root if LAB_DIR is unset:
+export LAB_DIR="${LAB_DIR:-$(pwd)/demo}"
+cd "$LAB_DIR"
+```
+
+
+## Create the cluster config
+
+```bash
+mkdir -p config
+
+cat > config/cluster.yaml <<EOF
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME}
+  region: ${AWS_REGION}
+  version: "${K8S_VERSION}"
+
+autoModeConfig:
+  enabled: true
+EOF
+
+cat config/cluster.yaml
+```
+
+Auto Mode enables default **system** and **general-purpose** node pools. You do not manage managed node groups for this lab. Nodes appear when workloads need capacity — including <Tooltip term="kpack" label="kpack" /> builds and <Tooltip term="pulse" label="Pulse" /> — not necessarily right after create.
+
+## Create the cluster
+
+```bash
+eksctl create cluster -f config/cluster.yaml
+```
+
+Expect roughly **10–20 minutes** for a new VPC and control plane. <Tooltip term="eksctl" label="eksctl" /> also installs the **metrics-server** addon and writes a kubeconfig entry when the cluster is ready.
+
+## Configure kubectl
+
+```bash
+aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+kubectl get nodes
+```
+
+An empty node list (`No resources found`) is normal for a fresh Auto Mode <Tooltip term="eks" label="EKS" /> cluster. Nodes scale in when kpack builds or Pulse pods are scheduled.
+
+<Aside type="note">
+  This lab pins Kubernetes **1.36** (current EKS default in `ap-southeast-2`). kubectl client should be 1.29+.
+</Aside>
+
+## Verify Auto Mode
+
+```bash
+aws eks describe-cluster --name "$CLUSTER_NAME" --region "$AWS_REGION" \
+  --query 'cluster.{version:version,status:status,compute:computeConfig}'
+kubectl config current-context
+```
+
+Expect `status` **ACTIVE**, `version` **1.36**, and `compute.enabled` **true** with node pools such as `general-purpose` and `system`.
+
+## Next
+
+[Argo CD capability](/deploy-and-operate/argocd-capability/) — enable managed <Tooltip term="argocd" label="Argo CD" /> on this cluster.

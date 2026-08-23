@@ -1,0 +1,165 @@
+{
+  "$schema": "./aws-resources.schema.json",
+  "lab": "buildpacks-eks-walkthrough",
+  "description": "Canonical AWS and Kubernetes names for this lab. Scripts and agents should read this file instead of scraping MDX.",
+  "defaults": {
+    "awsProfile": "sandbox",
+    "awsRegion": "ap-southeast-2",
+    "idcRegion": "ap-southeast-2",
+    "clusterName": "cluster-1",
+    "kubernetesVersion": "1.36",
+    "argocdCapabilityName": "lab-argocd",
+    "argocdRoleName": "ArgoCDCapabilityRole",
+    "kpackNamespace": "default",
+    "kpackServiceAccount": "kpack-sa",
+    "kpackIrsaRoleName": "cluster-1-kpack-ecr",
+    "kpackIrsaPolicyName": "cluster-1-kpack-ecr-policy",
+    "gitUser": "kpack-codecommit-git",
+    "ecrRepository": "pulse",
+    "codecommitApp": "pulse-app",
+    "codecommitDeploy": "pulse-deploy",
+    "imageTag": "main",
+    "builderTag": "kpack-builder"
+  },
+  "env": {
+    "AWS_PROFILE": "sandbox",
+    "AWS_PAGER": "",
+    "AWS_REGION": "ap-southeast-2",
+    "AWS_DEFAULT_REGION": "ap-southeast-2",
+    "IDC_REGION": "ap-southeast-2",
+    "CLUSTER_NAME": "cluster-1",
+    "K8S_VERSION": "1.36",
+    "ARGOCD_CAPABILITY_NAME": "lab-argocd",
+    "ARGOCD_ROLE_NAME": "ArgoCDCapabilityRole",
+    "ARGOCD_NAMESPACE": "argocd",
+    "KPACK_NAMESPACE": "default",
+    "KPACK_SERVICE_ACCOUNT": "kpack-sa",
+    "KPACK_IRSA_ROLE_NAME": "cluster-1-kpack-ecr",
+    "GIT_USER": "kpack-codecommit-git",
+    "ECR_REPO": "pulse",
+    "CODECOMMIT_APP": "pulse-app",
+    "CODECOMMIT_DEPLOY": "pulse-deploy"
+  },
+  "derivedEnv": {
+    "AWS_ACCOUNT_ID": "aws sts get-caller-identity --query Account --output text",
+    "ECR_REGISTRY": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com",
+    "ECR_URI": "${ECR_REGISTRY}/${ECR_REPO}",
+    "CODECOMMIT_APP_URL": "https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_APP}",
+    "CODECOMMIT_DEPLOY_URL": "https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_DEPLOY}",
+    "ARGOCD_ROLE_ARN": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${ARGOCD_ROLE_NAME}",
+    "CLUSTER_ARN": "aws eks describe-cluster --name ${CLUSTER_NAME} --region ${AWS_REGION} --query cluster.arn --output text"
+  },
+  "resources": [
+    {
+      "id": "eks-cluster",
+      "service": "eks",
+      "kind": "cluster",
+      "name": "cluster-1",
+      "env": "CLUSTER_NAME",
+      "createdOn": "cluster",
+      "teardown": "required",
+      "notes": "EKS Auto Mode; Kubernetes 1.36"
+    },
+    {
+      "id": "eks-argocd-capability",
+      "service": "eks",
+      "kind": "capability",
+      "name": "lab-argocd",
+      "type": "argo-cd",
+      "env": "ARGOCD_CAPABILITY_NAME",
+      "createdOn": "argocd-capability",
+      "teardown": "required",
+      "notes": "deletePropagationPolicy RETAIN — delete Applications first"
+    },
+    {
+      "id": "iam-argocd-role",
+      "service": "iam",
+      "kind": "role",
+      "name": "ArgoCDCapabilityRole",
+      "env": "ARGOCD_ROLE_NAME",
+      "createdOn": "argocd-capability",
+      "teardown": "optional",
+      "inlinePolicies": ["ArgoCDCodeCommitPulseDeploy"]
+    },
+    {
+      "id": "codecommit-pulse-app",
+      "service": "codecommit",
+      "kind": "repository",
+      "name": "pulse-app",
+      "env": "CODECOMMIT_APP",
+      "createdOn": "bootstrap-aws",
+      "teardown": "optional",
+      "consumer": "kpack Image pulse"
+    },
+    {
+      "id": "codecommit-pulse-deploy",
+      "service": "codecommit",
+      "kind": "repository",
+      "name": "pulse-deploy",
+      "env": "CODECOMMIT_DEPLOY",
+      "createdOn": "bootstrap-aws",
+      "teardown": "optional",
+      "consumer": "Argo CD Applications kpack + pulse"
+    },
+    {
+      "id": "ecr-pulse",
+      "service": "ecr",
+      "kind": "repository",
+      "name": "pulse",
+      "env": "ECR_REPO",
+      "createdOn": "bootstrap-aws",
+      "teardown": "optional",
+      "tags": ["main", "kpack-builder"],
+      "notes": "kpack pushes pulse:main and ClusterBuilder tag kpack-builder"
+    },
+    {
+      "id": "iam-kpack-irsa-role",
+      "service": "iam",
+      "kind": "role",
+      "name": "cluster-1-kpack-ecr",
+      "env": "KPACK_IRSA_ROLE_NAME",
+      "createdOn": "kpack",
+      "teardown": "optional",
+      "boundTo": "ServiceAccount default/kpack-sa"
+    },
+    {
+      "id": "iam-kpack-irsa-policy",
+      "service": "iam",
+      "kind": "policy",
+      "name": "cluster-1-kpack-ecr-policy",
+      "createdOn": "kpack",
+      "teardown": "optional",
+      "template": "demo/platform/kpack/irsa-policy.json"
+    },
+    {
+      "id": "iam-kpack-git-user",
+      "service": "iam",
+      "kind": "user",
+      "name": "kpack-codecommit-git",
+      "env": "GIT_USER",
+      "createdOn": "kpack",
+      "teardown": "optional",
+      "managedPolicies": ["arn:aws:iam::aws:policy/AWSCodeCommitPowerUser"],
+      "notes": "HTTPS Git credentials for kpack; SSO cannot create these"
+    }
+  ],
+  "kubernetes": {
+    "applications": [
+      { "name": "kpack", "namespace": "argocd", "path": "kpack", "destNamespace": "kpack" },
+      { "name": "pulse", "namespace": "argocd", "path": ".", "destNamespace": "default" }
+    ],
+    "workload": {
+      "deployment": "pulse",
+      "service": "pulse",
+      "namespace": "default",
+      "image": "${ECR_URI}:main"
+    },
+    "kpack": {
+      "image": "pulse",
+      "serviceAccount": "kpack-sa",
+      "namespace": "default",
+      "clusterBuilder": "default",
+      "secrets": ["ecr-credentials", "codecommit-credentials"]
+    }
+  }
+}

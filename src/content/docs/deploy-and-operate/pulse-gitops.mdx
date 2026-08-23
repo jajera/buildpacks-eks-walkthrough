@@ -1,0 +1,112 @@
+---
+title: Pulse via GitOps
+description: Sync pulse-deploy from CodeCommit with managed Argo CD.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+import { Aside } from "@astrojs/starlight/components";
+
+<Tooltip term="pulse" label="Pulse" /> is **not** installed with raw `kubectl apply` on the Deployment. Managed <Tooltip term="argocd" label="Argo CD" /> syncs `pulse-deploy` from <Tooltip term="codecommit" label="CodeCommit" /> — same Application pattern as [kpack via GitOps](/deploy-and-operate/kpack/) and [Kueue via GitOps](https://jajera.github.io/kueue-eks-walkthrough/deploy-and-operate/kueue-gitops/).
+
+This page is stage **3 · App** from the [architecture overview](/architecture/overview/) stages diagram: Application **pulse** (`path: .`) — Deployment, Service, and pods. Not the kpack `Image` CR also named `pulse`.
+
+Work from the **repository root** (paths below use `demo/…`).
+
+## Prerequisites
+
+- [kpack via GitOps](/deploy-and-operate/kpack/) — cluster registered for Argo CD, Application **kpack** Synced/Healthy, `pulse:main` in <Tooltip term="ecr" label="ECR" /> (or expect `ImagePullBackOff` until the build finishes)
+- [CodeCommit publish](/deploy-and-operate/codecommit/) — `pulse-deploy` has `main` (root Kustomize: `base/` only)
+
+Cluster registration (`in-cluster` secret + access policy) was completed on the kpack page. Re-apply those steps only if you skipped that page.
+
+## Set variables
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+export AWS_REGION=ap-southeast-2
+export CLUSTER_NAME=cluster-1
+export CODECOMMIT_DEPLOY=pulse-deploy
+
+export CLUSTER_ARN=$(aws eks describe-cluster \
+  --name "$CLUSTER_NAME" \
+  --region "$AWS_REGION" \
+  --query 'cluster.arn' \
+  --output text)
+export CODECOMMIT_DEPLOY_URL="https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_DEPLOY}"
+
+echo "CLUSTER_ARN=$CLUSTER_ARN"
+```
+
+## Deploy Pulse with Argo CD
+
+Destination `server` must be the EKS cluster ARN. Do **not** use `destination.name: in-cluster` alone (managed Argo CD will not sync that way):
+
+```bash
+mkdir -p demo/.generated/argocd
+
+cat > demo/.generated/argocd/application.yaml <<EOF
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: pulse
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: ${CODECOMMIT_DEPLOY_URL}
+    targetRevision: main
+    path: .
+  destination:
+    server: ${CLUSTER_ARN}
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+EOF
+
+kubectl apply -f demo/.generated/argocd/application.yaml
+kubectl -n argocd get application pulse
+```
+
+Right after create, `SYNC STATUS` / `HEALTH STATUS` may be blank for a few seconds while Argo CD reconciles.
+
+<Aside type="note">
+  CodeCommit auth is the capability role’s `GitPull` ([Argo CD capability](/deploy-and-operate/argocd-capability/)) — no Argo CD repository secret. Settings → Repositories stays empty for this path; that is expected.
+</Aside>
+
+## What you see while it syncs
+
+```bash
+kubectl -n argocd get application pulse -o wide
+kubectl -n argocd get applications -o wide
+kubectl -n default get deploy,svc,pods -l app.kubernetes.io/name=pulse
+```
+
+Typical sequence (often under a minute when `pulse:main` is already in ECR):
+
+1. Application **Synced** / **Progressing**, then **Healthy** — revision matches Application **kpack** (same `pulse-deploy` `main`)
+2. In `default`: Deployment **pulse**, LoadBalancer Service **pulse**, ConfigMap **pulse-config**, pod Ready
+3. You have **two** Applications on **`pulse-deploy`**: **kpack** (`path: kpack`) and **pulse** (`path: .`)
+
+Optional wait:
+
+```bash
+kubectl -n default wait deploy/pulse --for=condition=available --timeout=5m
+kubectl -n argocd get applications -o wide
+```
+
+Confirm in the Argo CD UI: cluster **`cluster-1`** → Capabilities → **lab-argocd** → Applications **kpack** and **pulse**.
+
+LoadBalancer hostname (for [Verify the service](/deploy-and-operate/verify-e2e/)):
+
+```bash
+kubectl -n default get svc pulse -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{"\n"}'
+```
+
+## Next
+
+[CNB lifecycle](/deploy-and-operate/prove-buildpacks/) — then [Verify the service](/deploy-and-operate/verify-e2e/).

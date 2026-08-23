@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="Buildpacks on EKS">
+  <!-- Platform slate -->
+  <rect width="32" height="32" rx="7" fill="#0f172a"/>
+  <!-- Soft CNB glow -->
+  <circle cx="14" cy="14" r="11" fill="#7dd3fc" fill-opacity="0.08"/>
+  <!-- Cloud Native Buildpacks cube stack (isometric) -->
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <!-- Back cube -->
+    <path d="M16 4.5 L24.5 9 V18 L16 22.5 L7.5 18 V9 Z" fill="#1e293b" stroke="#7dd3fc" stroke-width="1.25"/>
+    <!-- Mid cube -->
+    <path d="M16 8.5 L22.5 12 V19.5 L16 23 L9.5 19.5 V12 Z" fill="#334155" stroke="#a5f3fc" stroke-width="1.25"/>
+    <!-- Front cube (app layer) -->
+    <path d="M16 13 L20.5 15.5 V21 L16 23.5 L11.5 21 V15.5 Z" fill="#34d399" stroke="#6ee7b7" stroke-width="1"/>
+  </g>
+  <!-- Amazon EKS accent -->
+  <circle cx="25.5" cy="25.5" r="5" fill="#ED7100"/>
+  <path d="M25.5 22.8 L27.8 24.1 V26.7 L25.5 28 L23.2 26.7 V24.1 Z" fill="#fff7ed"/>
+</svg>

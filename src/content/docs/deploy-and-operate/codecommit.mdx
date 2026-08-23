@@ -1,0 +1,187 @@
+---
+title: CodeCommit publish
+description: Push Pulse app and deploy manifests to CodeCommit.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+
+## What you publish
+
+Two trees under `demo/` become two <Tooltip term="codecommit" label="CodeCommit" /> repos. Confirm this layout before any `git` commands:
+
+| Local path | CodeCommit repo |
+| --- | --- |
+| `demo/app/` | `pulse-app` (<Tooltip term="kpack" label="kpack" /> source) |
+| `demo/deploy/` | `pulse-deploy` (<Tooltip term="argocd" label="Argo CD" />: Applications **kpack** + **pulse**) |
+
+### `demo/app` → `pulse-app`
+
+```text
+demo/app
+├── cmd
+│   └── pulse
+│       └── main.go
+├── go.mod
+├── internal
+│   ├── config
+│   │   └── config.go
+│   ├── httpapi
+│   │   ├── dashboard.go
+│   │   ├── handler.go
+│   │   └── router.go
+│   └── monitor
+│       ├── checker.go
+│       ├── store.go
+│       └── types.go
+├── project.toml
+└── README.md
+```
+
+`project.toml` sets <Tooltip term="paketo" label="Paketo" /> Go targets (`./cmd/pulse`). There is **no Dockerfile**.
+
+### `demo/deploy` → `pulse-deploy`
+
+```text
+demo/deploy
+├── base
+│   ├── configmap.yaml
+│   ├── deployment.yaml
+│   └── service.yaml
+├── kpack
+│   ├── README.md
+│   └── release.yaml
+└── kustomization.yaml
+```
+
+One GitOps repo, two Argo CD Applications:
+
+| Application | `path` | What it syncs |
+| --- | --- | --- |
+| **kpack** | `kpack` | Controller install (`release.yaml`) |
+| **pulse** | `.` | Kustomize root (`base/` only — `kustomization.yaml` does not include `kpack/`) |
+
+## Set variables
+
+Reuse exports from [Bootstrap AWS](/deploy-and-operate/bootstrap-aws/). Run from the **repository root**:
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+export AWS_REGION=ap-southeast-2
+export CODECOMMIT_APP=pulse-app
+export CODECOMMIT_DEPLOY=pulse-deploy
+export CODECOMMIT_APP_URL="https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_APP}"
+export CODECOMMIT_DEPLOY_URL="https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_DEPLOY}"
+```
+
+
+## Prepare `pulse-deploy` image
+
+`demo/deploy/base/deployment.yaml` still has an `ECR_URI` placeholder. Copy the rendered file from bootstrap before you push:
+
+```bash
+cp demo/.generated/deploy/deployment.yaml demo/deploy/base/deployment.yaml
+grep 'image:' demo/deploy/base/deployment.yaml
+```
+
+Expect your account ECR URI ending in `pulse:main`, not the literal `ECR_URI:main`.
+
+The copy is only for the CodeCommit tree. Keep the walkthrough template as `ECR_URI` in git; regenerating from `demo/.generated/` before each push is enough.
+
+## Git remote options
+
+Pick one remote style for each repo:
+
+**Option A — `git-remote-codecommit`** (if installed: `pip install git-remote-codecommit`):
+
+```bash
+git remote add origin "codecommit::${AWS_REGION}://${CODECOMMIT_APP}"
+```
+
+**Option B — HTTPS + AWS CLI credential helper** (works with SSO profiles; no IAM Git username/password):
+
+```bash
+git remote add origin "$CODECOMMIT_APP_URL"
+git config credential.helper '!aws codecommit credential-helper $@'
+git config credential.UseHttpPath true
+```
+
+Use `$CODECOMMIT_DEPLOY_URL` the same way for `pulse-deploy`.
+
+## Push `pulse-app`
+
+Nested `git init` under `demo/app` is intentional — that tree becomes the CodeCommit repo (separate from this walkthrough’s GitHub repo).
+
+```bash
+cd demo/app
+git init -b main
+# Option A or B remote (see above)
+git add .
+git commit -m "Initial Pulse app"
+git push -u origin main
+cd -
+```
+
+## Push `pulse-deploy`
+
+Include **`kpack/`** in this push (controller release). Root `kustomization.yaml` still lists only `base/`, so Application **pulse** does not adopt the controller manifests.
+
+```bash
+cd demo/deploy
+git init -b main
+# Option A or B remote (see above; use CODECOMMIT_DEPLOY / CODECOMMIT_DEPLOY_URL)
+git add .
+git commit -m "Initial deploy manifests + kpack controller"
+git push -u origin main
+cd -
+```
+
+<Aside type="tip">
+  If <code>git commit</code> fails with an author identity error, set <code>git config user.email</code> and <code>user.name</code> once in that nested repo (or globally).
+</Aside>
+
+## Verify
+
+```bash
+aws codecommit get-branch --repository-name "$CODECOMMIT_APP" --branch-name main
+aws codecommit get-branch --repository-name "$CODECOMMIT_DEPLOY" --branch-name main
+```
+
+Example success (commit IDs will differ):
+
+```json
+{
+    "branch": {
+        "branchName": "main",
+        "commitId": "aabc46b00f25f0c885292bd4eea5d96a7fecf159"
+    }
+}
+```
+
+```json
+{
+    "branch": {
+        "branchName": "main",
+        "commitId": "f14423033b2a7a47b412a1b634cd67e7ef198eb3"
+    }
+}
+```
+
+Both repos must report `branchName` **`main`**. Optionally confirm the deploy image on CodeCommit (account ID redacted):
+
+```bash
+aws codecommit get-file \
+  --repository-name "$CODECOMMIT_DEPLOY" \
+  --commit-specifier main \
+  --file-path base/deployment.yaml \
+  --query fileContent --output text | base64 -d | grep 'image:'
+```
+
+```text
+          image: <ACCOUNT_ID>.dkr.ecr.ap-southeast-2.amazonaws.com/pulse:main
+```
+
+## Next
+
+[kpack via GitOps](/deploy-and-operate/kpack/) — Argo CD Application **kpack** syncs `pulse-deploy` at `path: kpack`.

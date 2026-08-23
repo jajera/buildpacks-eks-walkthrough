@@ -1,0 +1,67 @@
+---
+title: What are Cloud Native Buildpacks?
+description: Why buildpacks exist and what they replace on EKS.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+import ThemeDiagram from "@/components/ThemeDiagram.astro";
+import DiagramIconCredit from "@/components/DiagramIconCredit.astro";
+
+<Tooltip term="buildpacks" label="Cloud Native Buildpacks" /> turn application source into **OCI images** — without every team shipping a Dockerfile.
+
+## The problem
+
+<Tooltip term="gitops" label="GitOps" /> solved **deploy**. Many platforms still leave **build** in each application repo: a Dockerfile, CI credentials, and its own base-image upgrade path.
+
+<ThemeDiagram
+  dark="dockerfile-vs-buildpacks-diagram.svg"
+  light="dockerfile-vs-buildpacks-diagram-light.svg"
+  alt="Side by side: per-app Dockerfile with CI build versus platform buildpacks on EKS pushing to ECR"
+/>
+
+## What buildpacks change
+
+| | Dockerfile per app | Platform buildpacks |
+| --- | --- | --- |
+| **Who owns the build** | Each application team | Platform / ops |
+| **What devs push** | Source + Dockerfile + CI config | Source only |
+| **Base image CVEs** | Chase N repos | <Tooltip term="rebase" label="Rebase" /> one builder stack |
+| **In this lab** | Left column above | <Tooltip term="kpack" label="kpack" /> on <Tooltip term="eks" label="EKS" /> |
+
+## How there is no Dockerfile
+
+A Dockerfile is a **recipe the app repo owns**. Buildpacks move that recipe into a shared **builder** image the platform owns.
+
+1. **Builder** — An OCI image (here <Tooltip term="paketo" label="Paketo" /> jammy) that already contains language buildpacks and a CNB **lifecycle** binary. Nothing in `demo/app/` has to know how to `FROM golang` or copy layers.
+2. **Detect** — Each buildpack inspects the source tree. Pulse has `go.mod` / `./cmd/pulse`, so the Go buildpack **passes**; others skip. Detection replaces “read the Dockerfile.”
+3. **Build + Export** — The selected buildpacks compile the app into **layers**, then the lifecycle writes a normal OCI image (run image + app layers) and pushes it. Same end product as `docker build`, different author of the steps.
+4. **Optional config, not a Dockerfile** — Pulse’s `project.toml` only sets `BP_GO_TARGETS=./cmd/pulse` so Paketo knows which package to build. You can omit it for many apps; it is metadata, not an image recipe.
+
+You never write `FROM` / `RUN` / `COPY` in the app repo because the builder already encodes those steps for supported languages. The hands-on phase log (Detect → Build → Export) is on [CNB lifecycle](/deploy-and-operate/prove-buildpacks/).
+
+## Lab pipeline
+
+Push Go source to <Tooltip term="codecommit" label="CodeCommit" /> → <Tooltip term="kpack" label="kpack" /> runs CNB on-cluster → image in <Tooltip term="ecr" label="ECR" /> → managed <Tooltip term="argocd-capability" label="Argo CD" /> deploys → <Tooltip term="pulse" label="Pulse" /> serves HTTP.
+
+<ThemeDiagram
+  dark="lab-pipeline-diagram.svg"
+  light="lab-pipeline-diagram-light.svg"
+  alt="Lab pipeline from CodeCommit through kpack ECR Argo CD EKS to Pulse service"
+/>
+
+<Aside type="tip">
+  <Tooltip term="pack" label="pack" /> is the same buildpack engine on your laptop — useful for debugging before you push to CodeCommit.
+</Aside>
+
+## Pulse sample app
+
+<Tooltip term="pulse" label="Pulse" /> is a Go service monitor: dashboard, JSON API, background health checks, and `/healthz` / `/readyz` probes. It proves a real service runs after a buildpack build — not hello-world.
+
+See `demo/app/` in the repository.
+
+<DiagramIconCredit />
+
+## Next
+
+[kpack vs pack](/concepts/kpack-vs-pack/) then [Architecture overview](/architecture/overview/).

@@ -1,0 +1,70 @@
+---
+title: Verify the service
+description: Confirm Pulse is reachable after the buildpack build and GitOps deploy.
+---
+
+import DocImage from "@/components/DocImage.astro";
+import Tooltip from "@/components/Tooltip.astro";
+
+Confirm the <Tooltip term="gitops" label="GitOps" /> workload is healthy, then open the <Tooltip term="pulse" label="Pulse" /> dashboard. How the image was built is on [CNB lifecycle](/deploy-and-operate/prove-buildpacks/).
+
+## Platform checks
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+
+kubectl -n argocd get applications -o wide
+kubectl -n default get deploy,svc,pods -l app.kubernetes.io/name=pulse
+```
+
+Expect Applications **kpack** and **pulse** **Synced** / **Healthy**, and Pulse pods **Running**.
+
+If the image rebuilt but pods still use a stale digest (eval uses the mutable `:main` tag):
+
+```bash
+kubectl rollout restart deployment/pulse -n default
+```
+
+## Open Pulse
+
+LoadBalancer hostname:
+
+```bash
+kubectl -n default get svc pulse -o jsonpath='{.status.loadBalancer.ingress[0].hostname}{"\n"}'
+```
+
+Open that hostname in a browser (HTTP on port 80), or port-forward:
+
+```bash
+kubectl -n default port-forward svc/pulse 8080:80
+```
+
+Then open http://localhost:8080 — status cards and the monitors table:
+
+<DocImage
+  src="pulse-dashboard.png"
+  alt="Pulse dashboard — HTTP service monitor with status cards and monitors table"
+/>
+
+Probes and API:
+
+```bash
+curl -sS http://127.0.0.1:8080/healthz
+curl -sS http://127.0.0.1:8080/readyz
+curl -sS http://127.0.0.1:8080/api/v1/meta
+```
+
+## Deploy-side changes
+
+Edit `demo/deploy/`, push to <Tooltip term="codecommit" label="CodeCommit" /> `pulse-deploy` — Application **pulse** auto-syncs. Source rebuilds: [CNB lifecycle](/deploy-and-operate/prove-buildpacks/).
+
+## Checklist
+
+- [ ] Applications **kpack** and **pulse** Synced / Healthy
+- [ ] Pulse pods Running
+- [ ] Dashboard loads; `/healthz` returns ok
+
+## Next
+
+[Teardown](/deploy-and-operate/teardown/) when finished.

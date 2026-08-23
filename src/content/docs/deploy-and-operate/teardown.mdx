@@ -1,0 +1,134 @@
+---
+title: Teardown
+description: Delete Argo CD Applications, the EKS cluster, and optional AWS leftovers.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+import { Aside } from "@astrojs/starlight/components";
+
+Tear down billable compute first (cluster + LoadBalancer). Repos and some IAM roles are optional cleanup.
+
+## Set variables
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+export AWS_REGION=ap-southeast-2
+export CLUSTER_NAME=cluster-1
+export ARGOCD_CAPABILITY_NAME=lab-argocd
+export ARGOCD_ROLE_NAME=ArgoCDCapabilityRole
+export KPACK_IRSA_ROLE_NAME=cluster-1-kpack-ecr
+export GIT_USER=kpack-codecommit-git
+export ECR_REPO=pulse
+export CODECOMMIT_APP=pulse-app
+export CODECOMMIT_DEPLOY=pulse-deploy
+```
+
+Or load the same names from the inventory: `eval "$(node scripts/export-lab-env.mjs)"`.
+
+## Delete Applications (optional but clean)
+
+Removes GitOps-managed workloads while the capability still exists:
+
+```bash
+kubectl -n argocd delete application pulse --ignore-not-found
+kubectl -n argocd delete application kpack --ignore-not-found
+```
+
+## Delete the Argo CD capability
+
+Capability `deletePropagationPolicy` is **RETAIN** — delete Applications first (above), then the capability, then the cluster.
+
+```bash
+eksctl delete capability \
+  --cluster "$CLUSTER_NAME" \
+  --region "$AWS_REGION" \
+  --name "$ARGOCD_CAPABILITY_NAME"
+```
+
+eksctl waits up to `--timeout` (default 25m). If the capability is already gone, continue.
+
+## Delete the cluster
+
+```bash
+eksctl delete cluster --name "$CLUSTER_NAME" --region "$AWS_REGION" --wait
+```
+
+This removes the <Tooltip term="eks" label="EKS" /> control plane, Auto Mode nodes, and the Pulse LoadBalancer. Expect roughly **10–20 minutes**.
+
+<Tooltip term="codecommit" label="CodeCommit" /> and <Tooltip term="ecr" label="ECR" /> repos are left in place by default (next section).
+
+## Optional — IAM leftovers
+
+`eksctl delete cluster` removes the `kpack-sa` IRSA **role** with the cluster stack, but the customer-managed policy, the Argo CD capability role, and the CodeCommit git user can remain:
+
+```bash
+# Customer-managed kpack ECR policy (role may already be gone)
+KPACK_POLICY_ARN=$(aws iam list-policies --scope Local \
+  --query "Policies[?PolicyName==\`${KPACK_IRSA_ROLE_NAME}-policy\`].Arn | [0]" \
+  --output text)
+if [ -n "$KPACK_POLICY_ARN" ] && [ "$KPACK_POLICY_ARN" != "None" ]; then
+  aws iam detach-role-policy \
+    --role-name "$KPACK_IRSA_ROLE_NAME" \
+    --policy-arn "$KPACK_POLICY_ARN" 2>/dev/null || true
+  aws iam delete-role --role-name "$KPACK_IRSA_ROLE_NAME" 2>/dev/null || true
+  aws iam delete-policy --policy-arn "$KPACK_POLICY_ARN"
+fi
+
+# Argo CD capability role (inline CodeCommit policy)
+aws iam delete-role-policy \
+  --role-name "$ARGOCD_ROLE_NAME" \
+  --policy-name ArgoCDCodeCommitPulseDeploy 2>/dev/null || true
+aws iam delete-role --role-name "$ARGOCD_ROLE_NAME" 2>/dev/null || true
+
+# CodeCommit HTTPS git user for kpack
+GIT_CRED_ID=$(aws iam list-service-specific-credentials \
+  --user-name "$GIT_USER" \
+  --query 'ServiceSpecificCredentials[0].ServiceSpecificCredentialId' \
+  --output text 2>/dev/null || true)
+if [ -n "$GIT_CRED_ID" ] && [ "$GIT_CRED_ID" != "None" ]; then
+  aws iam delete-service-specific-credential \
+    --user-name "$GIT_USER" \
+    --service-specific-credential-id "$GIT_CRED_ID"
+fi
+aws iam detach-user-policy \
+  --user-name "$GIT_USER" \
+  --policy-arn arn:aws:iam::aws:policy/AWSCodeCommitPowerUser 2>/dev/null || true
+aws iam delete-user --user-name "$GIT_USER" 2>/dev/null || true
+```
+
+## Optional — CodeCommit and ECR
+
+```bash
+aws ecr delete-repository --repository-name "$ECR_REPO" --force
+aws codecommit delete-repository --repository-name "$CODECOMMIT_APP"
+aws codecommit delete-repository --repository-name "$CODECOMMIT_DEPLOY"
+```
+
+## Local cleanup
+
+```bash
+rm -rf demo/.generated
+rm -f demo/config/cluster.yaml demo/config/argocd-capability.yaml
+rm -f demo/config/iam/argocd-trust-policy.json \
+      demo/config/iam/argocd-codecommit-policy.json
+rmdir demo/config/iam 2>/dev/null || true
+```
+
+Nested `demo/app/.git` and `demo/deploy/.git` stay unless you remove those trees yourself.
+
+## Verify
+
+```bash
+aws eks describe-cluster --name "$CLUSTER_NAME" --region "$AWS_REGION"
+aws iam get-role --role-name "$ARGOCD_ROLE_NAME"
+aws iam get-role --role-name "$KPACK_IRSA_ROLE_NAME"
+aws iam list-policies --scope Local \
+  --query "Policies[?PolicyName==\`${KPACK_IRSA_ROLE_NAME}-policy\`].Arn" \
+  --output text
+aws iam get-user --user-name "$GIT_USER"
+aws ecr describe-repositories --repository-names "$ECR_REPO"
+aws codecommit list-repositories --query 'repositories[].repositoryName' --output text
+```
+
+Expect `ResourceNotFoundException` / `NoSuchEntity` for cluster, roles, user, and ECR (if you deleted repos). The kpack policy query should print nothing. CodeCommit list should not include `pulse-app` / `pulse-deploy` if you deleted them.

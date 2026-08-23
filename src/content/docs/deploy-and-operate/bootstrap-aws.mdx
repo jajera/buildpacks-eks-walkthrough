@@ -1,0 +1,106 @@
+---
+title: Bootstrap AWS
+description: Create CodeCommit repos ECR and render templates.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import Tooltip from "@/components/Tooltip.astro";
+
+## Environment
+
+Run this page from the **repository root** (paths below start with `demo/`). Prefer loading names from the inventory, then confirm account:
+
+```bash
+eval "$(node scripts/export-lab-env.mjs)"
+export LAB_DIR="$(pwd)/demo"
+export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+export ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+export CODECOMMIT_APP_URL="https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_APP}"
+export CODECOMMIT_DEPLOY_URL="https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_DEPLOY}"
+```
+
+Manual equivalent (same defaults as `demo/aws-resources.json`):
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+export AWS_REGION=ap-southeast-2
+export AWS_DEFAULT_REGION="$AWS_REGION"
+export IDC_REGION="$AWS_REGION"
+export CLUSTER_NAME=cluster-1
+export LAB_DIR="$(pwd)/demo"
+
+export CODECOMMIT_APP=pulse-app
+export CODECOMMIT_DEPLOY=pulse-deploy
+export ECR_REPO=pulse
+export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+export ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+export CODECOMMIT_APP_URL="https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_APP}"
+export CODECOMMIT_DEPLOY_URL="https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_DEPLOY}"
+```
+
+
+| Resource | Name (default) |
+| --- | --- |
+| <Tooltip term="codecommit" label="CodeCommit" /> | `pulse-app`, `pulse-deploy` |
+| <Tooltip term="ecr" label="ECR" /> | `pulse` |
+
+Confirm account and ECR URI before creating resources:
+
+```bash
+aws sts get-caller-identity
+echo "$ECR_URI"
+```
+
+## Create repositories
+
+Idempotent — on a re-run, existing repos are skipped (no error).
+
+```bash
+for repo in "$CODECOMMIT_APP" "$CODECOMMIT_DEPLOY"; do
+  aws codecommit get-repository --repository-name "$repo" >/dev/null 2>&1 \
+    || aws codecommit create-repository --repository-name "$repo"
+done
+
+aws ecr describe-repositories --repository-names "$ECR_REPO" >/dev/null 2>&1 \
+  || aws ecr create-repository --repository-name "$ECR_REPO"
+```
+
+## Render templates
+
+Substitute account ID, Region, and repo URLs into platform templates. Output goes to `demo/.generated/` (gitignored).
+
+```bash
+mkdir -p demo/.generated/kpack demo/.generated/argocd demo/.generated/deploy
+
+render() {
+  sed -e "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" \
+      -e "s/REGION/${AWS_REGION}/g" \
+      -e "s|ECR_URI|${ECR_URI}|g" \
+      -e "s|CODECOMMIT_APP_URL|${CODECOMMIT_APP_URL}|g" \
+      -e "s|CODECOMMIT_DEPLOY_URL|${CODECOMMIT_DEPLOY_URL}|g" \
+      "$1" > "$2"
+}
+
+render demo/deploy/base/deployment.yaml demo/.generated/deploy/deployment.yaml
+render demo/platform/kpack/image.yaml demo/.generated/kpack/image.yaml
+# Argo CD Applications are created on kpack via GitOps and Pulse via GitOps (need CLUSTER_ARN).
+```
+
+## Verify
+
+```bash
+aws codecommit list-repositories --query 'repositories[].repositoryName' --output text
+aws ecr describe-repositories --repository-names "$ECR_REPO" --query 'repositories[0].repositoryUri' --output text
+grep -E '^(  tag:|      url:)' demo/.generated/kpack/image.yaml
+```
+
+Expected:
+
+- CodeCommit lists `pulse-app` and `pulse-deploy`
+- ECR URI matches `echo "$ECR_URI"`
+- Rendered files contain your account-specific ECR and CodeCommit HTTPS URLs (no `ACCOUNT_ID`, `REGION`, or `ECR_URI` placeholders left)
+
+## Next
+
+[Cluster (Auto Mode)](/deploy-and-operate/cluster/).

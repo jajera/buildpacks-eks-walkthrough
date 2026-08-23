@@ -1,0 +1,36 @@
+---
+title: kpack vs pack
+description: When to build on-cluster with kpack versus locally with pack.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+import ThemeDiagram from "@/components/ThemeDiagram.astro";
+import DiagramIconCredit from "@/components/DiagramIconCredit.astro";
+
+<ThemeDiagram
+  dark="kpack-vs-pack-diagram.svg"
+  light="kpack-vs-pack-diagram-light.svg"
+  alt="Side by side: pack CLI builds demo/app to a local OCI image versus kpack on EKS building from CodeCommit and pushing to ECR"
+/>
+
+| | <Tooltip term="pack" label="pack CLI" /> | <Tooltip term="kpack" label="kpack" /> |
+| --- | --- | --- |
+| Runs | Your laptop or CI job | Kubernetes build pods on <Tooltip term="eks" label="EKS" /> |
+| Trigger | Manual or pipeline step | Git push to <Tooltip term="codecommit" label="CodeCommit" /> (polling) |
+| Registry | You push (e.g. <Tooltip term="ecr" label="ECR" /> login) | Cluster pushes via <Tooltip term="irsa" label="IRSA" /> |
+| Best for | Quick try, debugging | Platform <Tooltip term="gitops" label="GitOps" /> on EKS |
+
+This lab uses **kpack** end to end. Use **pack** locally to compare image size or debug buildpack detection:
+
+```bash
+cd demo/app
+pack build pulse-local \
+  --builder paketobuildpacks/builder-jammy-base \
+  --path .
+```
+
+## Builder in this lab
+
+<Tooltip term="paketo" label="Paketo" /> `builder-jammy-base` via kpack `ClusterBuilder` `default` — see [kpack via GitOps](/deploy-and-operate/kpack/).
+
+<DiagramIconCredit />

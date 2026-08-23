@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jajera.github.io/buildpacks-eks-walkthrough/demo/aws-resources.schema.json",
+  "title": "LabAwsResources",
+  "type": "object",
+  "required": ["lab", "defaults", "env", "resources"],
+  "properties": {
+    "lab": { "type": "string" },
+    "description": { "type": "string" },
+    "defaults": { "type": "object", "additionalProperties": true },
+    "env": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Static shell exports — source via scripts/export-lab-env.mjs or demo/config/env.example"
+    },
+    "derivedEnv": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Values computed at runtime (CLI or string templates)"
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "service", "kind", "name"],
+        "properties": {
+          "id": { "type": "string" },
+          "service": {
+            "type": "string",
+            "enum": ["eks", "ecr", "codecommit", "iam", "sso"]
+          },
+          "kind": { "type": "string" },
+          "name": { "type": "string" },
+          "env": { "type": "string" },
+          "createdOn": { "type": "string" },
+          "teardown": { "type": "string", "enum": ["required", "optional", "none"] }
+        },
+        "additionalProperties": true
+      }
+    },
+    "kubernetes": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": true
+}
