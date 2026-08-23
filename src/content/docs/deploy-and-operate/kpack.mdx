@@ -1,0 +1,278 @@
+---
+title: kpack via GitOps
+description: Register the cluster, sync the kpack controller with Argo CD, then configure builder credentials and the Pulse Image.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+import { Aside } from "@astrojs/starlight/components";
+import ThemeDiagram from "@/components/ThemeDiagram.astro";
+
+The kpack controller is installed via <Tooltip term="gitops" label="GitOps" />. Credential bootstrap (<Tooltip term="irsa" label="IRSA" />, <Tooltip term="ecr" label="ECR" /> docker secret, <Tooltip term="codecommit" label="CodeCommit" /> git secret) stays outside Git.
+
+<ThemeDiagram
+  dark="gitops-stages-diagram.svg"
+  light="gitops-stages-diagram-light.svg"
+  alt="Three stages: Application kpack installs the controller, Image CR pulse builds to ECR, Application pulse deploys the workload"
+/>
+
+Work from the **repository root**.
+
+## Prerequisites
+
+- [Argo CD capability](/deploy-and-operate/argocd-capability/) **ACTIVE**
+- [CodeCommit publish](/deploy-and-operate/codecommit/) — `pulse-deploy` has `main` (includes `kpack/`)
+- [Bootstrap AWS](/deploy-and-operate/bootstrap-aws/) rendered `demo/.generated/kpack/image.yaml`
+
+## Set variables
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+export AWS_REGION=ap-southeast-2
+export CLUSTER_NAME=cluster-1
+export ARGOCD_ROLE_NAME=ArgoCDCapabilityRole
+export CODECOMMIT_DEPLOY=pulse-deploy
+export CODECOMMIT_APP_URL="https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/pulse-app"
+
+export AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+export ACCOUNT_ID="$AWS_ACCOUNT_ID"
+export ARGOCD_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ARGOCD_ROLE_NAME}"
+export CLUSTER_ARN=$(aws eks describe-cluster \
+  --name "$CLUSTER_NAME" \
+  --region "$AWS_REGION" \
+  --query 'cluster.arn' \
+  --output text)
+export CODECOMMIT_DEPLOY_URL="https://git-codecommit.${AWS_REGION}.amazonaws.com/v1/repos/${CODECOMMIT_DEPLOY}"
+export ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+export ECR_URI="${ECR_REGISTRY}/pulse"
+
+export KPACK_NAMESPACE=default
+export KPACK_SERVICE_ACCOUNT=kpack-sa
+export KPACK_IRSA_ROLE_NAME=cluster-1-kpack-ecr
+
+echo "CLUSTER_ARN=$CLUSTER_ARN"
+```
+
+<Aside type="note">
+  Auto Mode may start with no nodes. The first builder/build schedules pods and capacity scales in — expect several extra minutes.
+</Aside>
+
+## Register this cluster for Argo CD
+
+Managed Argo CD does **not** deploy to `https://kubernetes.default.svc`. Register the local EKS cluster by **ARN**, then grant the capability role permission to sync (same step [Kueue via GitOps](https://jajera.github.io/kueue-eks-walkthrough/deploy-and-operate/kueue-gitops/) uses before installing the controller):
+
+```bash
+mkdir -p demo/.generated/argocd
+
+cat > demo/.generated/argocd/in-cluster-secret.yaml <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: in-cluster
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: cluster
+stringData:
+  name: in-cluster
+  server: ${CLUSTER_ARN}
+  project: default
+EOF
+
+kubectl apply -f demo/.generated/argocd/in-cluster-secret.yaml
+
+aws eks associate-access-policy \
+  --cluster-name "$CLUSTER_NAME" \
+  --principal-arn "$ARGOCD_ROLE_ARN" \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+  --access-scope type=cluster
+```
+
+On a re-run, `associate-access-policy` may report that the policy is already associated — that is fine.
+
+See [Register target clusters](https://docs.aws.amazon.com/eks/latest/userguide/argocd-register-clusters.html).
+
+## Deploy kpack controller with Argo CD
+
+Same CodeCommit repo as Pulse (`pulse-deploy`), different Application `path`. Destination `server` must be the EKS cluster ARN:
+
+```bash
+cat > demo/.generated/argocd/kpack-application.yaml <<EOF
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kpack
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: ${CODECOMMIT_DEPLOY_URL}
+    targetRevision: main
+    path: kpack
+  destination:
+    server: ${CLUSTER_ARN}
+    namespace: kpack
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+EOF
+
+kubectl apply -f demo/.generated/argocd/kpack-application.yaml
+kubectl -n argocd get application kpack
+```
+
+Wait until the Application is **Synced** and the controller Deployment is available:
+
+```bash
+kubectl -n argocd get application kpack -o wide
+kubectl -n kpack wait --for=condition=Available deployment/kpack-controller --timeout=300s
+kubectl -n kpack get pods
+```
+
+In the Argo CD UI you should see Application **kpack** owning `kpack-controller` / `kpack-webhook` (not orphan pods outside GitOps).
+
+<Aside type="note">
+  CodeCommit auth is the capability role’s `GitPull` ([Argo CD capability](/deploy-and-operate/argocd-capability/)) — no Argo CD repository secret. Settings → Repositories stays empty for this path; that is expected.
+</Aside>
+
+## Associate IAM OIDC provider
+
+Needed for IRSA on the build service account:
+
+```bash
+eksctl utils associate-iam-oidc-provider \
+  --cluster "$CLUSTER_NAME" \
+  --region "$AWS_REGION" \
+  --approve
+```
+
+## Service account (IRSA)
+
+```bash
+mkdir -p demo/.generated/kpack
+sed -e "s/ACCOUNT_ID/${AWS_ACCOUNT_ID}/g" -e "s/REGION/${AWS_REGION}/g" \
+  demo/platform/kpack/irsa-policy.json > demo/.generated/kpack/irsa-policy.json
+
+POLICY_ARN=$(aws iam create-policy \
+  --policy-name "${KPACK_IRSA_ROLE_NAME}-policy" \
+  --policy-document file://demo/.generated/kpack/irsa-policy.json \
+  --query 'Policy.Arn' --output text 2>/dev/null \
+  || aws iam list-policies --scope Local --query "Policies[?PolicyName==\`${KPACK_IRSA_ROLE_NAME}-policy\`].Arn | [0]" --output text)
+
+echo "POLICY_ARN=$POLICY_ARN"
+
+eksctl create iamserviceaccount \
+  --cluster="$CLUSTER_NAME" \
+  --region="$AWS_REGION" \
+  --namespace="$KPACK_NAMESPACE" \
+  --name="$KPACK_SERVICE_ACCOUNT" \
+  --role-name="$KPACK_IRSA_ROLE_NAME" \
+  --attach-policy-arn="$POLICY_ARN" \
+  --approve \
+  --override-existing-serviceaccounts
+```
+
+## ECR registry secret (required)
+
+kpack authenticates to registries with annotated secrets — **IRSA alone is not enough**. Without this, ClusterBuilder fails with ECR **401 Unauthorized**.
+
+ECR passwords expire (~12 hours). Re-run this block if builds start failing auth:
+
+```bash
+kubectl -n "$KPACK_NAMESPACE" create secret docker-registry ecr-credentials \
+  --docker-server="$ECR_REGISTRY" \
+  --docker-username=AWS \
+  --docker-password="$(aws ecr get-login-password --region "$AWS_REGION")" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl -n "$KPACK_NAMESPACE" annotate secret ecr-credentials \
+  "kpack.io/docker=${ECR_REGISTRY}" --overwrite
+```
+
+## CodeCommit git credentials
+
+kpack clones `pulse-app` with a **basic-auth** secret annotated for the CodeCommit host.
+
+SSO roles cannot create CodeCommit HTTPS Git credentials. Use a dedicated IAM user (lab):
+
+```bash
+GIT_USER=kpack-codecommit-git
+aws iam create-user --user-name "$GIT_USER" 2>/dev/null || true
+aws iam attach-user-policy --user-name "$GIT_USER" \
+  --policy-arn arn:aws:iam::aws:policy/AWSCodeCommitPowerUser
+
+CREDS=$(aws iam create-service-specific-credential \
+  --user-name "$GIT_USER" \
+  --service-name codecommit.amazonaws.com \
+  --output json)
+export GIT_USERNAME=$(echo "$CREDS" | jq -r '.ServiceSpecificCredential.ServiceUserName')
+export GIT_PASSWORD=$(echo "$CREDS" | jq -r '.ServiceSpecificCredential.ServicePassword')
+echo "GIT_USERNAME=$GIT_USERNAME"
+```
+
+```bash
+kubectl -n "$KPACK_NAMESPACE" apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: codecommit-credentials
+  namespace: ${KPACK_NAMESPACE}
+  annotations:
+    kpack.io/git: https://git-codecommit.${AWS_REGION}.amazonaws.com
+type: kubernetes.io/basic-auth
+stringData:
+  username: ${GIT_USERNAME}
+  password: ${GIT_PASSWORD}
+EOF
+
+kubectl -n "$KPACK_NAMESPACE" patch serviceaccount "$KPACK_SERVICE_ACCOUNT" \
+  --type merge \
+  -p '{"secrets":[{"name":"ecr-credentials"},{"name":"codecommit-credentials"}]}'
+```
+
+## Paketo ClusterBuilder + Pulse Image
+
+These CRs still use rendered local manifests (account-specific <Tooltip term="ecr" label="ECR" /> / CodeCommit URLs). <Tooltip term="paketo" label="Paketo" /> powers `ClusterBuilder` `default`:
+
+```bash
+sed "s|ECR_URI|${ECR_URI}|g" \
+  demo/platform/kpack/cluster-builder.yaml > demo/.generated/kpack/cluster-builder.yaml
+
+grep 'tag:' demo/.generated/kpack/cluster-builder.yaml
+kubectl apply -f demo/.generated/kpack/cluster-builder.yaml
+```
+
+Wait until the builder is Ready:
+
+```bash
+kubectl get clusterbuilder default -w
+# Ready=True — Ctrl+C when done
+```
+
+Then apply the Image:
+
+```bash
+kubectl apply -f demo/.generated/kpack/image.yaml
+kubectl get image pulse -w
+```
+
+Successful build pushes `pulse:main` to <Tooltip term="ecr" label="ECR" />:
+
+```bash
+aws ecr list-images --repository-name pulse
+```
+
+## Eval tag strategy
+
+Image tag is **`main`**. After a later rebuild, restart the workload (once Argo CD has deployed Pulse):
+
+```bash
+kubectl rollout restart deployment/pulse -n default
+```
+
+## Next
+
+[Pulse via GitOps](/deploy-and-operate/pulse-gitops/) — second Application on the same `pulse-deploy` repo (`path: .`).

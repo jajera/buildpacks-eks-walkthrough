@@ -1,0 +1,40 @@
+---
+title: Troubleshooting
+description: Common failures in the buildpacks EKS lab.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+
+| Symptom | Check |
+| --- | --- |
+| `aws sso login` / token errors | Re-auth (`aws sso login`) before AWS or kubectl steps |
+| Cannot open Argo CD UI | <Tooltip term="identity-center" label="Identity Center" /> user mapped `ADMIN` on the capability ([Argo CD capability](/deploy-and-operate/argocd-capability/)) |
+| Application never syncs | `destination.server` must be the EKS cluster ARN — not `destination.name: in-cluster` alone, not `kubernetes.default.svc` |
+| Argo CD Settings → Repositories empty | Expected — capability role `GitPull` on `pulse-deploy`, not a UI-registered repo |
+| <Tooltip term="kpack" label="kpack" /> build fails on git | Secret `codecommit-credentials` + `kpack-sa` patch; SSO cannot mint CodeCommit HTTPS credentials |
+| kpack / ClusterBuilder **401 Unauthorized** on <Tooltip term="ecr" label="ECR" /> | Create/refresh `ecr-credentials` — IRSA alone is not enough; passwords expire ~12h |
+| kpack IRSA policy missing | Rendered file `demo/.generated/kpack/irsa-policy.json` from [kpack via GitOps](/deploy-and-operate/kpack/) |
+| Build pod Pending / slow first build | Auto Mode may show empty nodes until capacity scales (several extra minutes) |
+| `ImagePullBackOff` on Pulse | Wait for `pulse:main` in ECR; tag must match `demo/deploy/base/deployment.yaml` |
+| Old app after kpack rebuild | Mutable tag `main` — `kubectl rollout restart deployment/pulse -n default` |
+| <Tooltip term="codecommit" label="CodeCommit" /> push fails | `git-remote-codecommit` or HTTPS git credentials; set `user.email` / `user.name` if commit rejects author |
+| kpack Image not rebuilding | `kubectl describe image pulse`; confirm CodeCommit revision advanced |
+| Capability delete leaves apps | `deletePropagationPolicy` is **RETAIN** — delete Applications first ([Teardown](/deploy-and-operate/teardown/)) |
+
+## Useful commands
+
+```bash
+kubectl describe image pulse
+kubectl get builds -A
+kubectl -n argocd get applications -o wide
+kubectl -n argocd describe application pulse
+kubectl -n argocd describe application kpack
+aws ecr describe-images --repository-name pulse
+```
+
+## Local Pulse smoke test (no AWS)
+
+```bash
+cd demo/app && go run ./cmd/pulse
+curl -s localhost:8080/healthz
+```

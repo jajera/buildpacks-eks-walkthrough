@@ -1,0 +1,60 @@
+---
+title: Manifest reference
+description: Files in demo/ and what each one does.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+
+## demo/ layout
+
+| Path | Purpose |
+| --- | --- |
+| `demo/aws-resources.json` | Canonical AWS / lab names for scripts and agents (ECR, CodeCommit, EKS, IAM) |
+| `demo/aws-resources.schema.json` | JSON Schema for the inventory |
+| `demo/config/env.example` | Shell exports generated from the inventory (`npm run lab:env:write`) |
+| `demo/app/` | <Tooltip term="pulse" label="Pulse" /> Go app → <Tooltip term="codecommit" label="CodeCommit" /> `pulse-app` |
+| `demo/deploy/` | GitOps repo seed → CodeCommit `pulse-deploy` |
+| `demo/deploy/base/` | Pulse Deployment / Service / ConfigMap (Application **pulse**, `path: .`) |
+| `demo/deploy/kpack/` | Vendored <Tooltip term="kpack" label="kpack" /> **v0.18.0** release (Application **kpack**, `path: kpack`) |
+| `demo/platform/kpack/` | ClusterBuilder, Image template, IRSA policy (applied from the kpack page, not GitOps) |
+| `demo/config/` | Generated cluster / capability / IAM JSON (local, gitignored) plus `env.example` |
+| `demo/.generated/` | Rendered Image / IRSA / Applications / secrets (local, not committed) |
+
+Kustomize root `demo/deploy/kustomization.yaml` lists **`base/` only** — it does not include `kpack/`. One repo, two Argo CD Applications. Argo CD Application manifests are written as heredocs on the kpack and Pulse GitOps pages (under `demo/.generated/argocd/`).
+
+## Namespaces
+
+| What | Namespace |
+| --- | --- |
+| Argo CD Applications | `argocd` |
+| kpack controller / webhook (GitOps) | `kpack` |
+| Pulse workload, Image CR, `kpack-sa`, registry/git secrets | `default` |
+
+## Key Kubernetes objects
+
+| Kind | Name | Source file |
+| --- | --- | --- |
+| ClusterStore / Stack / Builder | `default` / `base` / `default` | `demo/platform/kpack/cluster-builder.yaml` (render `ECR_URI`) |
+| Image | `pulse` | `demo/.generated/kpack/image.yaml` from `demo/platform/kpack/image.yaml` |
+| Application | `kpack` | `demo/.generated/argocd/kpack-application.yaml` ([kpack via GitOps](/deploy-and-operate/kpack/)) |
+| Application | `pulse` | `demo/.generated/argocd/application.yaml` ([Pulse via GitOps](/deploy-and-operate/pulse-gitops/)) |
+| Deployment / Service / ConfigMap | `pulse` / `pulse` / `pulse-config` | `demo/deploy/base/` |
+| Secret (cluster registration) | `in-cluster` | `demo/.generated/argocd/in-cluster-secret.yaml` (kpack page) |
+
+## Image CR (`pulse`)
+
+| Field | Value |
+| --- | --- |
+| `spec.tag` | `ECR_URI:main` |
+| `spec.serviceAccountName` | `kpack-sa` |
+| `spec.builder` | ClusterBuilder `default` |
+| `spec.source.git` | CodeCommit `pulse-app`, revision `main` |
+
+## Argo CD Applications
+
+| Application | `source.path` | Destination namespace | Notes |
+| --- | --- | --- | --- |
+| **kpack** | `kpack` | `kpack` | `ServerSideApply=true`; installs controller from `demo/deploy/kpack/release.yaml` |
+| **pulse** | `.` | `default` | Kustomize `base/` only |
+
+Both use `destination.server: CLUSTER_ARN` (EKS cluster ARN). Do not rely on `destination.name: in-cluster` alone for managed Argo CD.

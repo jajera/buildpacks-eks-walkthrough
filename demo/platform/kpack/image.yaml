@@ -1,0 +1,16 @@
+apiVersion: kpack.io/v1alpha2
+kind: Image
+metadata:
+  name: pulse
+  namespace: default
+spec:
+  tag: ECR_URI:main
+  serviceAccountName: kpack-sa
+  builder:
+    name: default
+    kind: ClusterBuilder
+  source:
+    git:
+      url: CODECOMMIT_APP_URL
+      revision: main
+  # Attach git credentials secret per kpack docs for your version.

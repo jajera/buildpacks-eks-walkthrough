@@ -1,0 +1,3 @@
+[[build.env]]
+name = "BP_GO_TARGETS"
+value = "./cmd/pulse"

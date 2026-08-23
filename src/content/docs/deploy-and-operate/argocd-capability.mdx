@@ -1,0 +1,207 @@
+---
+title: Argo CD capability
+description: Optional managed Argo CD on EKS using eksctl create capability.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+import DocImage from "@/components/DocImage.astro";
+import { Aside } from "@astrojs/starlight/components";
+
+Optional. Skip if you already use the <Tooltip term="argocd-capability" label="EKS Capability for Argo CD" /> on this cluster. For the full lab (Pulse via GitOps), this capability is **required**.
+
+## Overview
+
+Managed <Tooltip term="argocd" label="Argo CD" /> runs in the AWS control plane. You still sync Applications to the cluster the same way as self-hosted Argo CD.
+
+Requires:
+
+- <Tooltip term="eksctl" label="eksctl" /> **0.230.0+**
+- IAM role trusted by `capabilities.eks.amazonaws.com`
+- An <Tooltip term="identity-center" label="IAM Identity Center" /> instance (SSO) with at least one user
+
+See [Create an Argo CD capability using eksctl](https://docs.aws.amazon.com/eks/latest/userguide/argocd-create-eksctl.html).
+
+## Identity Center (IDC) = SSO
+
+**<Tooltip term="idc" label="IDC" />** means **IAM Identity Center** — the same workforce SSO directory behind `aws sso login` and the AWS access portal.
+
+For the **EKS Capability for Argo CD**, Identity Center is the **only** supported sign-in method. Local Argo CD users (admin / password in the Argo CD UI) are **not** supported.
+
+| What | How Identity Center is used |
+| --- | --- |
+| AWS CLI / console (`AWS_PROFILE=sandbox`) | `aws sso login` — browser SSO into an IAM role |
+| Managed Argo CD UI | Same Identity Center users/groups — SSO only |
+
+This page resolves your Identity Center **instance ARN**, **region**, and **user ID**, then maps that user to Argo CD role `ADMIN`. Without that mapping you cannot open the Argo CD UI after the capability is active.
+
+`IDC_*` variables below are only for that SSO wiring — they are not a second identity system.
+
+## Set variables
+
+Reuse the exports from [Prerequisites](/deploy-and-operate/prerequisites/). Stay in **`demo/`**, then resolve account and Identity Center values:
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+export AWS_REGION=ap-southeast-2
+export AWS_DEFAULT_REGION="$AWS_REGION"
+export CLUSTER_NAME=cluster-1
+export LAB_DIR="${LAB_DIR:-$(pwd)/demo}"
+cd "$LAB_DIR"
+
+export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+export ARGOCD_CAPABILITY_NAME=lab-argocd
+export ARGOCD_ROLE_NAME=ArgoCDCapabilityRole
+export ARGOCD_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/${ARGOCD_ROLE_NAME}"
+export CODECOMMIT_DEPLOY=pulse-deploy
+
+# Same Region as the cluster for this lab
+export IDC_REGION="$AWS_REGION"
+export IDC_INSTANCE_ARN=$(aws sso-admin list-instances --region "$IDC_REGION" \
+  --query 'Instances[0].InstanceArn' --output text)
+export IDC_STORE_ID=$(aws sso-admin list-instances --region "$IDC_REGION" \
+  --query 'Instances[0].IdentityStoreId' --output text)
+
+# Replace with your Identity Center username (same identity you use for aws sso login)
+export IDC_USERNAME=your-username
+export IDC_USER_ID=$(aws identitystore list-users \
+  --identity-store-id "$IDC_STORE_ID" \
+  --region "$IDC_REGION" \
+  --query "Users[?UserName==\`${IDC_USERNAME}\`].UserId" \
+  --output text)
+
+echo "ACCOUNT_ID=$ACCOUNT_ID"
+echo "IDC_INSTANCE_ARN=$IDC_INSTANCE_ARN"
+echo "IDC_USER_ID=$IDC_USER_ID"
+```
+
+Confirm `IDC_INSTANCE_ARN` and `IDC_USER_ID` are real values (not `None` / empty) before continuing.
+
+
+## Step 1 — Create the IAM trust policy and role
+
+```bash
+mkdir -p config/iam
+
+cat > config/iam/argocd-trust-policy.json <<'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "capabilities.eks.amazonaws.com"
+      },
+      "Action": [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ]
+    }
+  ]
+}
+EOF
+
+aws iam get-role --role-name "$ARGOCD_ROLE_NAME" >/dev/null 2>&1 \
+  || aws iam create-role \
+       --role-name "$ARGOCD_ROLE_NAME" \
+       --assume-role-policy-document file://config/iam/argocd-trust-policy.json
+```
+
+EKS creates cluster **access entries** for the role when the capability is created. Unlike the Kueue lab (Helm from a public OCI chart), this walkthrough also needs CodeCommit `GitPull` on the deploy repo — that is the next step.
+
+## Step 2 — CodeCommit GitPull for `pulse-deploy`
+
+This lab syncs manifests from <Tooltip term="codecommit" label="CodeCommit" /> via IAM (direct integration). Attach GitPull on **`pulse-deploy`** (kpack controller + Pulse live in the same repo as separate Argo CD Applications):
+
+```bash
+cat > config/iam/argocd-codecommit-policy.json <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "codecommit:GitPull",
+      "Resource": "arn:aws:codecommit:${AWS_REGION}:${ACCOUNT_ID}:${CODECOMMIT_DEPLOY}"
+    }
+  ]
+}
+EOF
+
+aws iam put-role-policy \
+  --role-name "$ARGOCD_ROLE_NAME" \
+  --policy-name ArgoCDCodeCommitPulseDeploy \
+  --policy-document file://config/iam/argocd-codecommit-policy.json
+```
+
+Docs: [Configure repository access](https://docs.aws.amazon.com/eks/latest/userguide/argocd-configure-repositories.html).
+
+## Step 3 — Create the capability config
+
+```bash
+cat > config/argocd-capability.yaml <<EOF
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: ${CLUSTER_NAME}
+  region: ${AWS_REGION}
+
+capabilities:
+  - name: ${ARGOCD_CAPABILITY_NAME}
+    type: ARGOCD
+    roleArn: ${ARGOCD_ROLE_ARN}
+    deletePropagationPolicy: RETAIN
+    configuration:
+      argocd:
+        awsIdc:
+          idcInstanceArn: ${IDC_INSTANCE_ARN}
+          idcRegion: ${IDC_REGION}
+        rbacRoleMappings:
+          - role: ADMIN
+            identities:
+              - id: ${IDC_USER_ID}
+                type: SSO_USER
+EOF
+
+cat config/argocd-capability.yaml
+```
+
+## Step 4 — Create the capability
+
+```bash
+eksctl create capability -f config/argocd-capability.yaml
+eksctl get capability \
+  --cluster "$CLUSTER_NAME" \
+  --name "$ARGOCD_CAPABILITY_NAME" \
+  --region "$AWS_REGION"
+```
+
+Expect several minutes while CloudFormation finishes. Wait until status is **ACTIVE**, then confirm Argo CD CRDs:
+
+```bash
+kubectl api-resources | grep argoproj.io
+```
+
+You should see `Application` and `ApplicationSet`.
+
+## Step 5 — Test SSO login
+
+Open the managed Argo CD UI from the EKS console: cluster **`cluster-1`** → **Capabilities** → **lab-argocd** → open the Argo CD endpoint.
+
+You should see SSO as the only sign-in option (no local username/password):
+
+<DocImage src="argocd-sso-login.png" alt="Managed Argo CD login — LOG IN VIA SSO" />
+
+1. Choose **LOG IN VIA SSO**.
+2. Complete Identity Center / AWS access portal sign-in for the user you mapped (`IDC_USERNAME` → `ADMIN`).
+3. Confirm you land in the Argo CD UI. An empty Applications page is success (nothing synced yet):
+
+<DocImage src="argocd-apps-empty.png" alt="Managed Argo CD Applications empty state after SSO" />
+
+If SSO fails or you have no access after login, re-check `IDC_USER_ID` and the `rbacRoleMappings` block in `config/argocd-capability.yaml`, then update the capability (recreate the mapping) so your Identity Center user is `ADMIN`.
+
+## Step 6 — Next: publish repos then GitOps
+
+Managed Argo CD does not deploy to `kubernetes.default.svc` by default. After [CodeCommit publish](/deploy-and-operate/codecommit/), [kpack via GitOps](/deploy-and-operate/kpack/) registers this cluster by **EKS ARN** and syncs Application **kpack**. [Pulse via GitOps](/deploy-and-operate/pulse-gitops/) then syncs Application **pulse** from the same `pulse-deploy` repo.
+
+Next: [CodeCommit publish](/deploy-and-operate/codecommit/).

@@ -1,0 +1,52 @@
+---
+title: IAM map
+description: Auth paths for CodeCommit, kpack, ECR, and Argo CD.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+
+<Tooltip term="irsa" label="IRSA" /> is **not** the only auth in this lab — and IRSA alone is **not** enough for kpack to push to <Tooltip term="ecr" label="ECR" />.
+
+## Auth paths
+
+| Actor | Mechanism | Permission |
+| --- | --- | --- |
+| You → <Tooltip term="codecommit" label="CodeCommit" /> | AWS SSO / CLI | `GitPush`, `GitPull` |
+| <Tooltip term="kpack" label="kpack" /> → CodeCommit | K8s secret `codecommit-credentials` (HTTPS git user) | Clone `pulse-app` |
+| kpack → ECR | `docker-registry` secret `ecr-credentials` on `kpack-sa` | Push image tags |
+| kpack → AWS APIs | IRSA on `kpack-sa` → role `cluster-1-kpack-ecr` | ECR API policy (lab attach) |
+| <Tooltip term="eks" label="EKS" /> nodes → ECR | Node / Auto Mode pull path | Pull `pulse:main` |
+| <Tooltip term="argocd" label="Argo CD" /> → CodeCommit | Capability role `ArgoCDCapabilityRole` | `codecommit:GitPull` on `pulse-deploy` |
+| Argo CD → EKS | Capability role + access entry | Deploy Applications |
+
+## Named principals (lab defaults)
+
+| Name | Type | Created on | Purpose |
+| --- | --- | --- | --- |
+| `ArgoCDCapabilityRole` | IAM role | [Argo CD capability](/deploy-and-operate/argocd-capability/) | Trust `capabilities.eks.amazonaws.com` |
+| `ArgoCDCodeCommitPulseDeploy` | Inline role policy | same | `GitPull` on `pulse-deploy` |
+| `cluster-1-kpack-ecr` | IAM role (IRSA) | [kpack via GitOps](/deploy-and-operate/kpack/) | Bound to SA `kpack-sa` / `default` |
+| `cluster-1-kpack-ecr-policy` | Customer-managed policy | same | From `demo/platform/kpack/irsa-policy.json` |
+| `kpack-codecommit-git` | IAM user | same | HTTPS Git credentials; `AWSCodeCommitPowerUser` |
+
+Generated local JSON (not committed): `demo/config/iam/argocd-trust-policy.json`, `demo/config/iam/argocd-codecommit-policy.json`.
+
+## kpack → ECR
+
+kpack authenticates to registries with annotated secrets — **IRSA alone is not enough**. Without `ecr-credentials`, ClusterBuilder fails with ECR **401 Unauthorized**.
+
+1. Create a `docker-registry` secret for ECR.
+2. Annotate `kpack.io/docker=<registry>`.
+3. List it on `kpack-sa` `secrets:`.
+
+ECR passwords expire (~12h). Re-create the secret if builds start failing auth.
+
+IRSA on `kpack-sa` still attaches the ECR push policy for AWS API access and consistency with the walkthrough.
+
+## CodeCommit git credentials for kpack
+
+SSO principals cannot create CodeCommit HTTPS Git credentials. Use the dedicated IAM user above. Store as `kubernetes.io/basic-auth` secret `codecommit-credentials` with annotation `kpack.io/git` (see [kpack via GitOps](/deploy-and-operate/kpack/)).
+
+## Argo CD capability
+
+No IRSA on workload pods for Git — the capability role pulls manifests from CodeCommit directly. Settings → Repositories staying empty in the UI is expected when auth is the capability role, not a repo secret.

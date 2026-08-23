@@ -1,0 +1,159 @@
+---
+title: CNB lifecycle
+description: Ordered Cloud Native Buildpacks phases as kpack builds Pulse on EKS.
+---
+
+import Tooltip from "@/components/Tooltip.astro";
+import ThemeDiagram from "@/components/ThemeDiagram.astro";
+
+When <Tooltip term="kpack" label="kpack" /> builds <Tooltip term="pulse" label="Pulse" />, <Tooltip term="buildpacks" label="Cloud Native Buildpacks" /> run in ordered phases inside a build pod on <Tooltip term="eks" label="EKS" /> — trigger, lifecycle, then the image in ECR.
+
+<ThemeDiagram
+  dark="cnb-lifecycle-diagram.svg"
+  light="cnb-lifecycle-diagram-light.svg"
+  alt="CodeCommit pulse-app and kpack Image CR trigger a build pod that runs Analyze Detect Restore Build Export then pushes pulse:main to ECR"
+/>
+
+## vs CodeBuild
+
+| Familiar (CodeBuild) | This lab |
+| --- | --- |
+| `buildspec.yml` phases | CNB lifecycle phases (diagram above) |
+| Build project pulls git, runs Docker | <Tooltip term="kpack" label="kpack" /> `Image` schedules a build pod |
+| `docker build` / push in `post_build` | Lifecycle **Export** → <Tooltip term="ecr" label="ECR" /> via <Tooltip term="irsa" label="IRSA" /> |
+| App repo owns a Dockerfile | Source + optional `project.toml` only |
+
+## Before the phases
+
+### Trigger
+
+kpack polls <Tooltip term="codecommit" label="CodeCommit" /> `pulse-app` (or reacts after you push). Watch the Image:
+
+```bash
+export AWS_PROFILE=sandbox
+export AWS_PAGER=""
+export AWS_REGION=ap-southeast-2
+
+kubectl get image pulse -w
+```
+
+A Ready Image with `latestSuccessfulImage` pointing at `…/pulse:main` means a build already finished. To re-watch phases, push a commit to `pulse-app` or note the next build pod name below.
+
+### Inputs
+
+```bash
+# No Dockerfile in the app tree
+find demo/app -iname 'Dockerfile*' -o -iname '*.dockerfile' | head
+
+cat demo/app/project.toml
+```
+
+`project.toml` tells <Tooltip term="paketo" label="Paketo" /> which Go package to build (`BP_GO_TARGETS`):
+
+```toml
+[[build.env]]
+name = "BP_GO_TARGETS"
+value = "./cmd/pulse"
+```
+
+Builder on the cluster:
+
+```bash
+kubectl get clusterbuilder default
+```
+
+## Lifecycle steps
+
+Find the latest build pod and follow its logs:
+
+```bash
+kubectl get pods -n default -l image.kpack.io/image=pulse \
+  --sort-by=.metadata.creationTimestamp
+
+BUILD_POD=$(kubectl get pods -n default -l image.kpack.io/image=pulse \
+  --sort-by=.metadata.creationTimestamp \
+  -o jsonpath='{.items[-1:].metadata.name}')
+echo "BUILD_POD=$BUILD_POD"
+kubectl -n default logs -f "$BUILD_POD" --all-containers
+```
+
+If no build pods remain, trigger a rebuild (push to `pulse-app`) or inspect a completed Build:
+
+```bash
+kubectl get builds -n default
+kubectl describe build pulse-build-1 -n default
+```
+
+Phases match the diagram. In kpack’s creator logs you often see **Detect / Restore / Build / Export** as these signatures (not always the classic `=== DETECTING ===` banners):
+
+### 1 · Analyze
+
+Validates registry access and reads metadata from the previous app image so later phases can reuse layers. Look for lines about restoring metadata / previous image.
+
+### 2 · Detect
+
+Chooses which Paketo buildpacks apply. For Pulse expect something like:
+
+```text
+5 of 9 buildpacks participating
+paketo-buildpacks/go-dist
+paketo-buildpacks/go-mod-vendor
+paketo-buildpacks/go-build
+```
+
+### 3 · Restore
+
+Copies cached layers from earlier builds (`Restoring metadata for "…" from app image`).
+
+### 4 · Build
+
+Buildpacks transform source into runnable artifacts. With `BP_GO_TARGETS=./cmd/pulse`, Paketo runs Go build — for example:
+
+```text
+Paketo Buildpack for Go Build …
+  Running 'go build … ./cmd/pulse'
+```
+
+### 5 · Export
+
+Assembles the OCI image and pushes **`pulse:main`** to ECR (kpack service account + IRSA — no `docker push` from your laptop):
+
+```text
+Saving …/pulse:main...
+Build successful
+```
+
+Confirm the Image and registry:
+
+```bash
+kubectl get image pulse
+aws ecr describe-images --repository-name pulse --image-ids imageTag=main \
+  --query 'imageDetails[0].{pushed:imagePushedAt,digest:imageDigest}' \
+  --output table
+```
+
+## Rebuild loop
+
+1. Edit `demo/app/`, commit, push to CodeCommit `pulse-app`
+2. `kubectl get image pulse -w` until Ready again
+3. Watch the new build pod logs through Detect → Build → Export
+4. Restart the workload so it picks up the `:main` tag (eval uses a mutable tag):
+
+```bash
+kubectl rollout restart deployment/pulse -n default
+```
+
+No Dockerfile and no manual `docker push`.
+
+Optional local check (same engine as the cluster): see [kpack vs pack](/concepts/kpack-vs-pack/) and <Tooltip term="pack" label="pack" /> `inspect-image` once you have pulled `pulse:main`.
+
+## Success criteria
+
+- [ ] No Dockerfile under `demo/app` / `pulse-app`
+- [ ] Build pod logs show Detect → Build → Export (CNB lifecycle)
+- [ ] `pulse:main` in ECR after the build
+- [ ] Rebuild on CodeCommit push without a laptop `docker push`
+
+## Next
+
+[Verify the service](/deploy-and-operate/verify-e2e/) — LoadBalancer, dashboard, `/healthz`.
