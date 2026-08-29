@@ -52,13 +52,19 @@ html {
 
 /*
   Constrain header + side rails to the docs frame (sidebar + article + TOC)
-  so the top bar is not full-bleed on wide viewports.
+  so the top bar is not full-bleed on wide viewports. Splash/landing has no
+  sidebar — use the wider content column (67.5rem) instead.
 */
 :root {
   --sl-frame-width: calc(
     var(--sl-sidebar-width) + var(--sl-content-width) + var(--sl-sidebar-width)
   );
   --sl-frame-gutter: max(0rem, calc((100vw - var(--sl-frame-width)) / 2));
+  --sl-splash-frame-width: var(--sl-content-width);
+  --sl-splash-frame-gutter: max(
+    0rem,
+    calc((100vw - var(--sl-splash-frame-width)) / 2)
+  );
 }
 
 @media (min-width: 72rem) {
@@ -73,6 +79,12 @@ html {
 
   :root[data-has-sidebar] .main-frame {
     margin-inline: var(--sl-frame-gutter);
+  }
+
+  /* Landing / splash: align header with the centered content column */
+  :root:not([data-has-sidebar]) .page > header.header {
+    width: min(100%, var(--sl-splash-frame-width));
+    inset-inline-start: var(--sl-splash-frame-gutter);
   }
 
   /*
