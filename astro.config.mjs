@@ -1,6 +1,5 @@
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
-import starlightThemeVintage from "starlight-theme-vintage";
 import { starlightBasePath } from "starlight-base-path";
 
 export default defineConfig({
@@ -12,9 +11,16 @@ export default defineConfig({
       favicon: "/favicon.svg",
       description:
         "Hands on EKS lab for Cloud Native Buildpacks with kpack CodeCommit ECR and managed Argo CD.",
-      plugins: [starlightThemeVintage(), starlightBasePath()],
+      // Preview: drop vintage so Patina tokens are not fighting cream/serif.
+      plugins: [starlightBasePath()],
       routeMiddleware: "./src/routeData.ts",
-      customCss: ["./src/styles/splash-overrides.css"],
+      customCss: [
+        "./src/styles/patina-tokens.css",
+        "./src/styles/splash-overrides.css",
+      ],
+      components: {
+        ThemeSelect: "./src/components/ThemeSelect.astro",
+      },
       social: [
         {
           icon: "github",
