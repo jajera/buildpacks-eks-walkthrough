@@ -4,8 +4,8 @@ import starlightThemeVintage from "starlight-theme-vintage";
 import { starlightBasePath } from "starlight-base-path";
 
 export default defineConfig({
-  site: "https://jajera.github.io",
-  base: "/buildpacks-eks-walkthrough/",
+  site: "https://buildpacks-eks-walkthrough.johna.kiwi",
+  base: "/",
   integrations: [
     starlight({
       title: "Buildpacks on EKS",
