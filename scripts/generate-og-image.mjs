@@ -160,7 +160,7 @@ const svg = `<?xml version="1.0" encoding="UTF-8"?>
   <rect x="96" y="370" width="300" height="8" rx="4" fill="url(#accent)"/>
   <text x="96" y="420" fill="#94a3b8" font-family="sans-serif" font-size="21" font-weight="500">Source → OCI · no Dockerfile</text>
   <text x="96" y="452" fill="#94a3b8" font-family="sans-serif" font-size="21" font-weight="500">kpack · CodeCommit · managed Argo CD</text>
-  <text x="96" y="568" fill="#64748b" font-family="sans-serif" font-size="18">jajera.github.io/buildpacks-eks-walkthrough</text>
+  <text x="96" y="568" fill="#64748b" font-family="sans-serif" font-size="18">buildpacks-eks-walkthrough.johna.kiwi</text>
 
   <g transform="translate(${cardX} ${cardY})">
     <rect x="0" y="0" width="${cardW}" height="${cardH}" rx="16" fill="#1e293b" stroke="#475569" stroke-width="2"/>

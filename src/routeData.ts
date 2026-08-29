@@ -1,6 +1,6 @@
 import { defineRouteMiddleware } from "@astrojs/starlight/route-data";
 
-const OG_IMAGE_PATH = "/buildpacks-eks-walkthrough/og-image.png";
+const OG_IMAGE_PATH = "/og-image.png";
 const OG_IMAGE_ALT =
   "Buildpacks on EKS walkthrough — kpack CodeCommit ECR and managed Argo CD";
 

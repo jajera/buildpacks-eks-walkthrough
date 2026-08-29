@@ -2,7 +2,7 @@
 
 Hands on EKS lab for Cloud Native Buildpacks with kpack CodeCommit ECR and managed Argo CD.
 
-**Site:** https://jajera.github.io/buildpacks-eks-walkthrough/
+**Site:** https://buildpacks-eks-walkthrough.johna.kiwi/
 
 ## Quick start
 
@@ -11,11 +11,11 @@ npm install
 npm run dev
 ```
 
-Open the local preview URL (usually http://localhost:4321/buildpacks-eks-walkthrough/).
+Open the local preview URL (usually http://localhost:4321/).
 
 ## Lab assets
 
-Runnable demo under `demo/` — Pulse app, deploy manifests, and walkthrough steps. Follow the site starting at [Prerequisites](https://jajera.github.io/buildpacks-eks-walkthrough/deploy-and-operate/prerequisites/).
+Runnable demo under `demo/` — Pulse app, deploy manifests, and walkthrough steps. Follow the site starting at [Prerequisites](https://buildpacks-eks-walkthrough.johna.kiwi/deploy-and-operate/prerequisites/).
 
 AWS resource names for scripts and agents: [`demo/aws-resources.json`](demo/aws-resources.json) — load with `eval "$(node scripts/export-lab-env.mjs)"`.
 
