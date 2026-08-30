@@ -20,6 +20,7 @@ export default defineConfig({
       ],
       components: {
         ThemeSelect: "./src/components/ThemeSelect.astro",
+        Head: "./src/components/Head.astro",
       },
       social: [
         {
